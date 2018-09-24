@@ -1,0 +1,71 @@
+syntax = "proto3";
+package whale.resource.proto;
+
+message UploadFileReq {
+    bytes file = 1;
+    string dir = 2;
+    string store = 3;
+    Meta meta = 4;
+}
+
+message UploadAvatarReq {
+    bytes file = 1;
+}
+
+message UploadFaceImageReq {
+    bytes file = 1;
+    string dir = 2;
+    Meta meta = 3;
+}
+
+message UploadFileResp {
+    string filename = 1;
+    string url = 2;
+}
+
+message GetFileReq {
+    string id = 1;
+    string md5 = 2;
+}
+message Meta {
+    string firmware_type = 1;
+    string face_id = 2;
+    bool whole = 3;
+    string model_type = 4;
+    string camera_ip = 5;
+};
+
+message FileResp {
+    string id = 1;
+    string md5 = 2;
+    string url = 3;
+    int32 size = 4;
+    int32 create_time = 5;
+    Meta meta = 6;
+}
+
+message FileListResp {
+    repeated FileResp files = 1;
+}
+
+message UploadModelReq {
+    bytes file = 1;
+    string dir = 2;
+    Meta meta = 3;
+}
+
+service ResourceService {
+    rpc UploadImage (UploadFileReq) returns (UploadFileResp) {
+    };
+    rpc UploadModel (UploadModelReq) returns (UploadFileResp) {
+    };
+    rpc UploadFaceImage (UploadFaceImageReq) returns (UploadFileResp) {
+    };
+    rpc GetFileInfo (GetFileReq) returns (FileResp) {
+    };
+    rpc UploadAvatar (UploadAvatarReq) returns (UploadFileResp) {
+    };
+    rpc UploadFirmware (UploadFileReq) returns (UploadFileResp) {
+    };
+}
+

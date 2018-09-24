@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Remote Control</title>
+    <style type="text/css">
+        body {
+            margin: 0px;
+            font-family: "Lato", sans-serif;
+            font-size: 15px;
+            line-height: 30px;
+        }
+    </style>
+</head>
+<body onload="init()">
+    <h1></h1><br/>
+    <div>
+        <button id="main" onclick="trainMainBGModel()">train main background model</button>
+        <button id="uploadMain" onclick="uploadMainBGModel()">upload main background model</button>
+    </div>
+    <div>
+        <button id="sub" onclick="trainSubBGModel()">train sub background model</button>
+        <button id="uploadSub" onclick="uploadSubBGModel()">upload sub background model</button>
+        <br/><br/><p id="progress" style="text-autospace: ideograph-space"></p><br/><br/>
+    </div>
+    <div>
+        <button type="button" onclick="calibrateModels()">calibrate models</button>
+    </div>
+    <div>
+        <button type="button" onclick="restartDepthCamera()">restart depth camera</button>
+    </div>
+    <div>
+        <button type="button" onclick="back()">back</button>
+    </div>
+
+</body>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script>
+    // set globally so that result returned from server can be set to gloabl variables
+    $.ajaxSetup({async: false});
+
+    function init() {
+        var deviceMAC = location.search;
+        deviceMAC = deviceMAC.substring(1, deviceMAC.length);
+        $("h1").text("Device: " + deviceMAC);
+        // init device status checking function, check every second if device is still active
+        self.setInterval("checkDeviceStatus()", 1000);
+    }
+
+    var inProgress = false;
+    function trainMainBGModel() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/trainMainBGModel";
+        var postData = {"op": "train main background model", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+                if (response === "mqtt message train main background model sent") {
+                    if (!inProgress) {
+                        inProgress = true;
+                        self.setInterval("checkModelsTrainingProgress()", 700);
+                    }
+                }
+            }
+        );
+    }
+
+    function trainSubBGModel() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/trainSubBGModel";
+        var postData = {"op": "train sub background model", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+                if (response === "mqtt message train sub background model sent") {
+                    if (!inProgress) {
+                        inProgress = true;
+                        self.setInterval("checkModelsTrainingProgress()", 700);
+                    }
+                }
+            }
+        );
+    }
+
+
+    var uploadingBGModel = false;
+    function uploadMainBGModel() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/uploadMainBGModel";
+        var postData = {"op": "upload main background model", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+                if (!uploadingBGModel) {
+                    uploadingBGModel = true;
+                    self.setInterval("checkDataStatus()", 700);
+                }
+            }
+        );
+    }
+
+    function uploadSubBGModel() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/uploadSubBGModel";
+        var postData = {"op": "upload sub background model", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+                if (!uploadingBGModel) {
+                    uploadingBGModel = true;
+                    self.setInterval("checkDataStatus()", 700);
+                }
+            }
+        );
+    }
+
+    var modelsReady = false;
+    function checkModelsTrainingProgress() {
+        if (modelsReady) {
+            return;
+        }
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/checkModelsTrainingProgress";
+        var postData = {"op": "check models training progress", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                if (response === "no update") {
+                    return;
+                }
+                var info = "<p>" + response + "</p>";
+                $("#progress").append(info);
+            }
+        );
+    }
+
+
+    var mainModelDownloaded = false;
+    var subModelDownloaded = false;
+    function checkDataStatus() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/checkDataStatus";
+        var redirectUrl = "http://" + location.host + "/web/directToModelCalibration";
+        var postData = {"op": "check data status", "deviceMAC": deviceMAC};
+        // send Http post request to check if model data is ready
+        $.post(url, postData,
+            function(response) {
+                if (response === "data is ready") {
+                    mainModelDownloaded = true;
+                    subModelDownloaded = true;
+                    alert(response);
+                }
+                else if (response === "main model data is uploaded" && !mainModelDownloaded) {
+                    postData = {"role": "main", "deviceMAC": deviceMAC};
+                    url = "http://" + location.host + "/web/downloadModels";
+                    $.post(url, postData,
+                        function(response) {
+                            mainModelDownloaded = true;
+                            alert(response);
+                        }
+                    );
+                }
+                else if (response === "sub model data is uploaded" && !subModelDownloaded) {
+                    postData = {"role": "sub", "deviceMAC": deviceMAC};
+                    url = "http://" + location.host + "/web/downloadModels";
+                    $.post(url, postData,
+                        function(response) {
+                            subModelDownloaded = true;
+                            alert(response);
+                        }
+                    );
+                }
+            }
+        );
+    }
+
+    function calibrateModels() {
+        if (mainModelDownloaded && subModelDownloaded) {
+            var deviceMAC = location.search;
+            var redirectUrl = "http://" + location.host + "/web/directToModelCalibration";
+            location.href = redirectUrl + deviceMAC;
+        }
+        else {
+            alert("data is not ready");
+        }
+    }
+
+
+    function restartDepthCamera() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/restartDepthCamera";
+        var postData = {"op": "restart depth camera", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+            }
+        );
+    }
+    
+    function back() {
+        location.href = "http://" + location.host + "/web/showActiveDevice";
+    }
+
+    function checkDeviceStatus() {
+        var deviceMAC = location.search;
+        var url = "http://" + location.host + "/web/checkDeviceStatus";
+        var postData = {"op": "check device status", "deviceMAC": deviceMAC};
+        $.post(url, postData,
+            function(response) {
+                if (response === "down") {
+                    alert("device is not active anymore...");
+                    location.href = "http://" + location.host + "/web/showActiveDevice";
+                }
+            }
+        );
+    }
+</script>
+</html>
+
+
+
+
+
+

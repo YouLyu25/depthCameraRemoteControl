@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Camera Calibration Test</title>
+    <style type="text/css">
+        body {
+            margin: 0px;
+            background-color: #000000;
+            color: #fff;
+            font-family: "Lato", sans-serif;
+            font-size: 15px;
+            line-height: 30px;
+        }
+
+        canvas {
+            display:block;
+        }
+
+        .sideNavigator {
+            height: 100%;
+            width: 0;
+            position: fixed;
+            z-index: 1;
+            top: 0;
+            left: 0;
+            background-color: #111;
+            overflow-x: hidden;
+            transition: 0.5s;
+            padding-top: 60px;
+        }
+
+        .sideNavigator a {
+            padding: 8px 8px 8px 32px;
+            text-decoration: none;
+            font-size: 25px;
+            color: #818181;
+            display: block;
+            transition: 0.3s;
+        }
+
+        .controlButton {
+            height: 20px;
+            width: 10px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            background-color: transparent;
+        }
+
+        .sideNavigator .closeButton {
+            position: absolute;
+            top: 0;
+            right: 25px;
+            font-size: 36px;
+            margin-left: 50px;
+        }
+
+        #main {
+            transition: margin-left .5s;
+            padding: 16px;
+        }
+
+        @media screen and (max-height: 450px) {
+            .sideNavigator {padding-top: 15px;}
+            .sideNavigator a {font-size: 18px;}
+        }
+    </style>
+</head>
+<body onload="draw()">
+    <div id="sideNavigator" class="sideNavigator">
+        <a style="font-size:40px;cursor:pointer" class="closeButton" onclick="closeNav()"><</a>
+        <a style="font-size:17px;cursor:pointer" id="showControlInfo" onclick="showControlInfo()">control info</a>
+        <a style="font-size:17px;cursor:pointer" id="uploadFrontGround" onclick="uploadFrontGround()">upload front ground</a>
+        <a style="font-size:17px;cursor:pointer" onclick="modifyRotationMatrix()">modify rotation matrix</a>
+        <a style="font-size:17px;cursor:pointer" onclick="finishFloorCalibration()">send floor calibration result</a>
+        <a style="font-size:17px;cursor:pointer" onclick="finish()">finish</a>
+        <a style="font-size:17px;cursor:pointer" onclick="back()">back</a>
+    </div>
+    <div id="main" class="controlButton">
+        <span style='font-size:20px;cursor:pointer' onclick='openNav()'>&#9776;</span>
+    </div>
+    <script src="https://johnson2heng.github.io/three.js-demo/lib/three.js"></script>
+    <script src="https://johnson2heng.github.io/three.js-demo/lib/js/controls/OrbitControls.js"></script>
+    <script src="https://johnson2heng.github.io/three.js-demo/lib/js/libs/stats.min.js"></script>
+    <script src="https://johnson2heng.github.io/three.js-demo/lib/js/libs/dat.gui.min.js"></script>
+    <script src="https://johnson2heng.github.io/three.js-demo/lib/js/controls/TransformControls.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script>
+        // set globally so that result returned from server can be set to gloabl variables
+        $.ajaxSetup({async: false});
+        // init device status checking function, check every second if device is still active
+        function initDeviceStatusChecking() {
+            self.setInterval("checkDeviceStatus()", 1000);
+        }
+
+        // init three basic components: scene, camera and renderer
+        var camera;
+        function initCamera() {
+            camera = new THREE.PerspectiveCamera(90, window.innerWidth / window.innerHeight, 1, 1000000);
+            camera.position.set(1000, 1000, 11500);
+        }
+
+        var scene;
+        function initScene() {
+            scene = new THREE.Scene();
+            // show axes and grid
+            scene.add(new THREE.AxesHelper(50000));
+            scene.add(new THREE.GridHelper(50000, 50));
+        }
+
+        var helperPlane;
+        function initHelperPlane() {
+            // init helper plane for calibration
+            var geometry = new THREE.Geometry();
+            var p1 = new THREE.Vector3(-4000, -4000, 0);
+            var p2 = new THREE.Vector3(-4000, 4000, 0);
+            var p3 = new THREE.Vector3(4000, 4000, 0);
+            var p4 = new THREE.Vector3(4000, -4000, 0);
+            geometry.vertices.push(p1, p2, p3, p4);
+
+            var normal = new THREE.Vector3(0, 0, 1);
+            var face1 = new THREE.Face3(0, 1, 2, normal);
+            var face2 = new THREE.Face3(0, 2, 3, normal);
+            geometry.faces.push(face1, face2);
+
+            var material = new THREE.MeshBasicMaterial({
+                color: 0x0a90bf,
+                side: THREE.DoubleSide,
+                transparent: true
+            });
+            helperPlane = new THREE.Mesh(geometry, material);
+            scene.add(helperPlane);
+        }
+
+        var renderer;
+        function initRender() {
+            renderer = new THREE.WebGLRenderer({antialias: true});
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+        }
+
+
+        // three js orbit controls API
+        var orbitControls;
+        function initOrbitControls() {
+            orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+            // whether zoom in/out is enabled
+            orbitControls.enableZoom = true;
+            // whether to automatically rotate
+            orbitControls.autoRotate = false;
+            // min distance from camera to the original point
+            orbitControls.minDistance = 200;
+            // max distance from camera to the original point
+            orbitControls.maxDistance = 100000;
+            // whether right button drag is enabled
+            orbitControls.enablePan = true;
+        }
+
+
+        // create models using loaded file data
+        var pointsField1;
+        var pointsField2;
+        function initModel1() {
+            var geometry = new THREE.Geometry();
+            // show model 1 in green
+            var material = new THREE.PointsMaterial(
+                {size: 20, vertexColors: true, color: 0x00ff00, transparent: true});
+
+            // add particles to the grid
+            var i = 0;
+            while (i < arr1.length) {
+                var particle = new THREE.Vector3(arr1[i], arr1[i+1], arr1[i+2]);
+                geometry.vertices.push(particle);
+                geometry.colors.push(new THREE.Color(0xffffff));
+                i = i + 3;
+            }
+            pointsField1 = new THREE.Points(geometry, material);
+            scene.add(pointsField1);
+        }
+
+        function initModel2() {
+            var geometry = new THREE.Geometry();
+            // show model 2 in red
+            var material = new THREE.PointsMaterial(
+                {size: 20, vertexColors: true, color: 0xff0000, transparent: true});
+
+            // add particles to the grid
+            var i = 0;
+            while (i < arr2.length) {
+                var particle = new THREE.Vector3(arr2[i], arr2[i+1], arr2[i+2]);
+                geometry.vertices.push(particle);
+                geometry.colors.push(new THREE.Color(0xffffff));
+                i = i + 3;
+            }
+            pointsField2 = new THREE.Points(geometry, material);
+            // set this property to make rotation easier
+            pointsField2.matrixAutoUpdate = true;
+            scene.add(pointsField2);
+        }
+
+        // init and show front ground main and sub models
+        var mainFGField = [[]];
+        var subFGField = [[]];
+        function initFGModel(mainFGModel, subFGModel, id) {
+            var geometry = new THREE.Geometry();
+            // show model 1 in green
+            var material = new THREE.PointsMaterial(
+                {size: 20, vertexColors: true, color: 0x00ff00, transparent: true});
+
+            // add particles to the grid
+            var i = 0;
+            while (i < mainFGModel.length) {
+                var particle = new THREE.Vector3(mainFGModel[i], mainFGModel[i+1], mainFGModel[i+2]);
+                geometry.vertices.push(particle);
+                geometry.colors.push(new THREE.Color(0xffffff));
+                i = i + 3;
+            }
+            mainFGField[id] = new THREE.Points(geometry, material);
+            scene.add(mainFGField[id]);
+
+            geometry = new THREE.Geometry();
+            // show model 1 in green
+            material = new THREE.PointsMaterial(
+                {size: 20, vertexColors: true, color: 0xff0000, transparent: true});
+
+            // add particles to the grid
+            i = 0;
+            while (i < subFGModel.length) {
+                var particle = new THREE.Vector3(subFGModel[i], subFGModel[i+1], subFGModel[i+2]);
+                geometry.vertices.push(particle);
+                geometry.colors.push(new THREE.Color(0xffffff));
+                i = i + 3;
+            }
+            subFGField[id] = new THREE.Points(geometry, material);
+            scene.add(subFGField[id]);
+            FGModelShow[id] = true;
+            FGModelLoaded[id] = true;
+        }
+
+
+        // translate and rotate the reference plane using matrix transformation
+        function transformPlane(amount, axisIndex) {
+            var matrix = new THREE.Matrix4();
+            var geometry = helperPlane.geometry;
+            switch (axisIndex) {
+                case 0: // rotate around x axis
+                    geometry.applyMatrix(matrix.makeRotationX(amount));
+                    break;
+                case 1: // rotate around y axis
+                    geometry.applyMatrix(matrix.makeRotationY(amount));
+                    break;
+                case 2: // rotate around z axis
+                    geometry.applyMatrix(matrix.makeRotationZ(amount));
+                    break;
+                case 3: // shift along x axis
+                    geometry.applyMatrix(matrix.makeTranslation(amount, 0, 0));
+                    helperPlane.updateMatrixWorld(false);
+                    break;
+                case 4: // shift along y axis
+                    geometry.applyMatrix(matrix.makeTranslation(0, amount, 0));
+                    helperPlane.updateMatrixWorld(false);
+                    break;
+                case 5: // shift along z axis
+                    geometry.applyMatrix(matrix.makeTranslation(0, 0, amount));
+                    helperPlane.updateMatrixWorld(false);
+                    break;
+            }
+            helperPlane.geometry = geometry;
+        }
+
+        // translate and rotate the object using matrix transformation
+        function transformObject(amount, axisIndex) {
+            var matrix = new THREE.Matrix4();
+            var geometry = pointsField2.geometry;
+            switch (axisIndex) {
+                case 0: // rotate around x axis
+                    geometry.applyMatrix(matrix.makeRotationX(amount));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeRotationX(amount));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+                case 1: // rotate around y axis
+                    geometry.applyMatrix(matrix.makeRotationY(amount));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeRotationY(amount));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+                case 2: // rotate around z axis
+                    geometry.applyMatrix(matrix.makeRotationZ(amount));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeRotationZ(amount));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+                case 3: // shift along x axis
+                    geometry.applyMatrix(matrix.makeTranslation(amount, 0, 0));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeTranslation(amount, 0, 0));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+                case 4: // shift along y axis
+                    geometry.applyMatrix(matrix.makeTranslation(0, amount, 0));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeTranslation(0, amount, 0));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+                case 5: // shift along z axis
+                    geometry.applyMatrix(matrix.makeTranslation(0, 0, amount));
+                    for (var i = 0; i < subFGField.length; ++i) {
+                        var FGGeometry = subFGField[i].geometry;
+                        FGGeometry.applyMatrix(matrix.makeTranslation(0, 0, amount));
+                        subFGField[i].geometry = FGGeometry;
+                    }
+                    break;
+            }
+            pointsField2.geometry = geometry;
+        }
+
+
+        // global array for storing resulting data of matrix transformation
+        var paramA;
+        var paramB;
+        var paramC;
+        var paramD;
+        var planeOn = true;
+        function initPlaneTransformControls() {
+            // event trigger when key-board buttons are pressed
+            window.addEventListener('keydown', function(event) {
+                switch ( event.keyCode ) {
+                    case 74: // J --> rotate clockwise on x axis
+                        transformPlane(-0.01, 0);
+                        break;
+                    case 76: // L --> rotate anti-clockwise on x axis
+                        transformPlane(0.01, 0);
+                        break;
+
+                    case 73: // I --> rotate clockwise on y axis
+                        transformPlane(-0.01, 1);
+                        break;
+                    case 75: // K --> rotate anti-clockwise on y axis
+                        transformPlane(0.01, 1);
+                        break;
+
+                    case 85: // U --> rotate clockwise on z axis
+                        transformPlane(-0.01, 2);
+                        break;
+                    case 79: // O --> rotate anti-clockwise on z axis
+                        transformPlane(0.01, 2);
+                        break;
+
+                    case 219: // [ --> rotate clockwise on x axis
+                        transformPlane(-30, 3);
+                        break;
+                    case 221: // ] --> rotate anti-clockwise on x axis
+                        transformPlane(30, 3);
+                        break;
+
+                    case 186: // : --> rotate clockwise on y axis
+                        transformPlane(-30, 4);
+                        break;
+                    case 222: // " --> rotate anti-clockwise on y axis
+                        transformPlane(30, 4);
+                        break;
+
+                    case 190: // > --> rotate clockwise on z axis
+                        transformPlane(-30, 5);
+                        break;
+                    case 191 : // ? --> rotate anti-clockwise on z axis
+                        transformPlane(30, 5);
+                        break;
+
+                    case 51: // 3 --> show/hide helper Plane
+                        if (planeOn) { // hide helper plane
+                            planeOn = false;
+                            scene.remove(helperPlane);
+                        }
+                        else { // show helper plane
+                            planeOn = true;
+                            scene.add(helperPlane);
+                        }
+                        break;
+
+                    case 56: // 8 --> increase helper plane opacity
+                        helperPlane.material.opacity += 0.05;
+                        break;
+
+                    case 57: // 9 --> decrease helper plane opacity
+                        helperPlane.material.opacity -= 0.05;
+                        break;
+                }
+            });
+        }
+
+
+        // global array for storing resulting data of matrix transformation
+        var objectTransResult;
+        var mainModelOn = true;
+        var subModelOn = true;
+        function initObjectTransformControls() {
+            // event trigger when key-board buttons are pressed
+            window.addEventListener('keydown', function(event) {
+                switch ( event.keyCode ) {
+                    case 87: // A --> rotate clockwise on x axis
+                        transformObject(-0.01, 0);
+                        break;
+                    case 83: // D --> rotate anti-clockwise on x axis
+                        transformObject(0.01, 0);
+                        break;
+
+                    case 65: // W --> rotate clockwise on y axis
+                        transformObject(-0.01, 1);
+                        break;
+                    case 68: // S --> rotate anti-clockwise on y axis
+                        transformObject(0.01, 1);
+                        break;
+
+                    case 69: // E --> rotate clockwise on z axis
+                        transformObject(-0.01, 2);
+                        break;
+                    case 81 : // Q --> rotate anti-clockwise on z axis
+                        transformObject(0.01, 2);
+                        break;
+
+                    case 70: // F --> shift left along x axis
+                        transformObject(-30, 3);
+                        break;
+                    case 72: // H --> shift right along x axis
+                        transformObject(30, 3);
+                        break;
+
+                    case 71: // G --> shift up along y axis
+                        transformObject(-30, 4);
+                        break;
+                    case 84: // T --> shift down along y axis
+                        transformObject(30, 4);
+                        break;
+
+                    case 82: // R --> shift front along z axis
+                        transformObject(-30, 5);
+                        break;
+                    case 89: // Y --> shift back along z axis
+                        transformObject(30, 5);
+                        break;
+
+                    case 49: // 1 --> show/hide main model
+                        if (mainModelOn) { // hide main model
+                            mainModelOn = false;
+                            scene.remove(pointsField1);
+                        }
+                        else { // show main model
+                            mainModelOn = true;
+                            scene.add(pointsField1);
+                        }
+                        break;
+
+                    case 50: // 2 --> show/hide sub model
+                        if (subModelOn) { // hide sub model
+                            subModelOn = false;
+                            scene.remove(pointsField2);
+                        }
+                        else { // show sub model
+                            subModelOn = true;
+                            scene.add(pointsField2);
+                        }
+                        break;
+
+                    case 52: // 4 --> increase main model opacity
+                        pointsField1.material.opacity += 0.05;
+                        break;
+
+                    case 53: // 5 --> decrease main model opacity
+                        pointsField1.material.opacity -= 0.05;
+                        break;
+
+                    case 54: // 6 --> increase sub model opacity
+                        pointsField2.material.opacity += 0.05;
+                        break;
+
+                    case 55: // 7 --> decrease sub model opacity
+                        pointsField2.material.opacity -= 0.05;
+                        break;
+
+                    case 48: // 0 --> show rotated result
+                        var arr = pointsField2.toJSON();
+                        var objectTransResult = arr["geometries"][0]["data"]["vertices"];
+                        console.log(objectTransResult);
+                }
+            });
+        }
+
+
+        // called when window size is changed
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.render(scene, camera);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+
+        // arrays for storing cloud point data
+        var arr1 = [];
+        var arr2 = [];
+        var loaded = false;
+        function loadPointCloudData() {
+            if (loaded) {
+                return;
+            }
+
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/loadModels";
+            var postData1 = {"role": "main", "deviceMAC": deviceMAC};
+            var postData2 = {"role": "sub", "deviceMAC": deviceMAC};
+
+            // send HTTP request to get background data
+            $.post(url, postData1,
+                function(response) {
+                    var dataStr = String(response);
+                    var dataArray = dataStr.split(",)");
+                    // delete last element as it is nil and useless
+                    dataArray.pop();
+                    for (var i = 0; i < dataArray.length; ++i) {
+                        dataArray[i] = dataArray[i].replace("(", "");
+                        arr1.push(Number(dataArray[i]));
+                    }
+                }
+            );
+            console.log("main BG model " + arr1);
+            initModel1();
+
+            $.post(url, postData2,
+                function(response) {
+                    var dataStr = String(response);
+                    var dataArray = dataStr.split(",)");
+                    // delete last element as it is nil and useless
+                    dataArray.pop();
+                    for (var i = 0; i < dataArray.length; ++i) {
+                        dataArray[i] = dataArray[i].replace("(", "");
+                        arr2.push(Number(dataArray[i]));
+                    }
+                }
+            );
+            console.log("sub BG model " + arr2);
+            initObjectTransformControls();
+            initModel2();
+            loaded = true;
+        }
+
+
+        // dynamically add front ground models
+        var modelCount = 0;
+        var currentNode = document.getElementById("uploadFrontGround");
+        var dataChecking = [];
+        var FGModelShow = [];
+        var FGModelLoaded = [];
+        function uploadFrontGround() {
+            var frontGroundModel = "<div><a></a></div>";
+            $(currentNode).after(frontGroundModel);
+            currentNode = currentNode.nextSibling;
+            currentNode.id = String(modelCount);
+            FGModelShow[modelCount] = false;
+            FGModelLoaded[modelCount] = false;
+            $(currentNode).text("front model " + String(modelCount));
+            currentNode.setAttribute("style", "font-size:14px;cursor:pointer;");
+            currentNode.style.paddingLeft = "2cm";
+            dataChecking[currentNode.id] = false;
+            $(currentNode).click(function() {
+                var id = $(this).attr("id");
+                var deviceMAC = location.search;
+                var url = "http://" + location.host + "/web/uploadFrontGround";
+                var postData = {"op": "upload front ground", "deviceMAC": deviceMAC, "id": id};
+                if (!dataChecking[id]) {
+                    $.post(url, postData,
+                        function (response) {
+                            alert("front ground uploading");
+                            self.setInterval(function () {
+                                checkFGDataStatus(currentNode.id);
+                            }, 500);
+                            dataChecking[currentNode.id] = true;
+                        }
+                    );
+                }
+                if (FGModelShow[id] && FGModelLoaded[id]) {
+                    scene.remove(mainFGField[id]);
+                    scene.remove(subFGField[id]);
+                    FGModelShow[id] = false;
+                }
+                else if (!FGModelShow[id] && FGModelLoaded[id]) {
+                    scene.add(mainFGField[id]);
+                    scene.add(subFGField[id]);
+                    FGModelShow[id] = true;
+                }
+            });
+            ++modelCount;
+        }
+
+
+        var inProgress = false;
+        // functions called when calibration is complete
+        function finishModelsCalibration() {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/finishModelsCalibration";
+
+            var arr = pointsField2.toJSON();
+            objectTransResult = arr["geometries"][0]["data"]["vertices"];
+            console.log("modified matrix" + objectTransResult);
+            var postData = {"op": "finish models calibration",
+                "result": JSON.stringify(objectTransResult),
+                "deviceMAC": deviceMAC};
+
+            $.post(url, postData,
+                function(response) {
+                    alert(response);
+                    if (response === "download rotated 3D cloud data message sent") {
+                        if (!inProgress) {
+                            inProgress = true;
+                            self.setInterval("checkCalibrationStatus()", 700);
+                        }
+                    }
+                }
+            );
+        }
+
+        function finishFloorCalibration() {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/finishFloorCalibration";
+            var vertex1 = helperPlane.geometry.vertices[0];
+            var vertex2 = helperPlane.geometry.vertices[1];
+            var vertex3 = helperPlane.geometry.vertices[2];
+            // calculating helper plane's normal and constant
+            var planeCalculated = new THREE.Plane();
+            planeCalculated.setFromCoplanarPoints(vertex1, vertex2, vertex3);
+            paramA = planeCalculated.normal.x;
+            paramB = planeCalculated.normal.y;
+            paramC = planeCalculated.normal.z;
+            paramD = planeCalculated.constant;
+
+            var postData = {"op": "finish floor calibration", "paramA": paramA,
+                "paramB": paramB, "paramC": paramC, "paramD": paramD,
+                "deviceMAC": deviceMAC};
+
+            $.post(url, postData,
+                function(response) {
+                    alert(response);
+                    if (response === "download floor parameter message sent") {
+                        if (!inProgress) {
+                            inProgress = true;
+                            self.setInterval("checkCalibrationStatus()", 700);
+                        }
+                    }
+                }
+            );
+        }
+
+        function modifyRotationMatrix() {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/modifyRotationMatrix";
+            if (subFGField[modelCount-1] !== null) {
+                var arr = subFGField[modelCount-1].toJSON();
+                objectTransResult = arr["geometries"][0]["data"]["vertices"];
+                console.log("rotated FG matrix" + String(modelCount-1) + ": " + objectTransResult);
+                var postData = {
+                    "op": "modify rotation matrix",
+                    "rotatedMatrix": JSON.stringify(objectTransResult),
+                    "deviceMAC": deviceMAC
+                };
+
+                $.post(url, postData,
+                    function (response) {
+                        alert(response);
+                    }
+                );
+
+                for (var i = 0; i < modelCount; ++i) {
+                    var node = document.getElementById(String(i));
+                    $(node).remove();
+                    scene.remove(mainFGField[i]);
+                    scene.remove(subFGField[i]);
+                }
+                modelCount = 0;
+                currentNode = document.getElementById("uploadFrontGround");
+            }
+        }
+
+
+        function checkFGDataStatus(msgId) {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/checkFGDataStatus";
+            var postData = {"op": "check FG data status", "deviceMAC": deviceMAC, "id": msgId};
+            $.post(url, postData,
+                function(response) {
+                    if (response !== "FG data not ready") {
+                        // TODO: load FG models
+                        var data = response.split("#");
+                        //var id = data[2];
+                        var id = msgId;
+                        // alert("id: " + id + ", msgId: " + msgId);
+                        var temp = data[0];
+                        var mainFGModelStr = temp.split("/");
+                        var mainFGModel = [];
+                        mainFGModelStr.forEach(function(data) {
+                            mainFGModel.push(+data);
+                        });
+                        temp = data[1];
+                        var subFGModelStr = temp.split("/");
+                        var subFGModel = [];
+                        subFGModelStr.forEach(function(data) {
+                            subFGModel.push(+data);
+                        });
+                        temp = data[3];
+                        var originSubFGModelStr = temp.split("/");
+                        var originSubFGModel = [];
+                        originSubFGModelStr.forEach(function(data) {
+                            originSubFGModel.push(+data);
+                        });
+                        alert("FG " + id + " is ready");
+                        console.log("main FG model (before rotation)" + String(id) + ": " + mainFGModel);
+                        console.log("sub FG model (before rotation)" + String(id) + ": " + subFGModel);
+                        console.log("origin sub FG model" + String(id) + ": " + originSubFGModel);
+                        // TODO: show FG model
+                        initFGModel(mainFGModel, subFGModel, id);
+                    }
+                }
+            );
+        }
+        
+        var modelsDownloaded = false;
+        var floorDownloaded = false;
+        function checkCalibrationStatus() {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/checkCalibrationStatus";
+            var postData = {"op": "check calibration status", "deviceMAC": deviceMAC};
+            $.post(url, postData,
+                function(response) {
+                    if (response === "downloaded") {
+                        alert("downloaded floor parameter, calibration successfully finished!");
+                        location.href = "http://" + location.host + "/web/showActiveDevice";
+                    }
+                    if (response === "models downloaded" && !modelsDownloaded) {
+                        modelsDownloaded = true;
+                        alert(response);
+                    }
+                    else if (response === "floor downloaded" && !floorDownloaded) {
+                        floorDownloaded = true;
+                    }
+                }
+            );
+        }
+
+
+        // render scene
+        function animate() {
+            // update controller
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+
+
+        // return to the previous page
+        function back() {
+            location.href = "http://" + location.host + "/web/directToControlInterface" + location.search;
+        }
+
+        function finish() {
+            location.href = "http://" + location.host + "/web/showActiveDevice";
+        }
+
+        function checkDeviceStatus() {
+            var deviceMAC = location.search;
+            var url = "http://" + location.host + "/web/checkDeviceStatus";
+            var postData = {"op": "check device status", "deviceMAC": deviceMAC};
+            $.post(url, postData,
+                function(response) {
+                    if (response === "down") {
+                        alert("device is not active anymore...");
+                        location.href = "http://" + location.host + "/web/showActiveDevice";
+                    }
+                }
+            );
+        }
+
+
+        // called when body is on load
+        function draw() {
+            initDeviceStatusChecking();
+            initScene();
+            initCamera();
+            initRender();
+            initOrbitControls();
+            initPlaneTransformControls();
+            initHelperPlane();
+            loadPointCloudData();
+            animate();
+            window.onresize = onWindowResize;
+        }
+
+
+        // functions associated with control menu
+        function openNav() {
+            document.getElementById("sideNavigator").style.width = "350px";
+            document.getElementById("main").style.marginRight = "2000px";
+            $("#main").empty();
+        }
+
+        function closeNav() {
+            document.getElementById("sideNavigator").style.width = "0";
+            var controlButton = "<span style='font-size:20px;cursor:pointer' onclick='openNav()'>&#9776;</span>";
+            $("#main").append(controlButton);
+            if (show) {
+                $("#info").remove();
+                show = false;
+            }
+        }
+
+        var show = false;
+        function showControlInfo() {
+            var info = "<div id='info'>\n" + "<a style='font-size:12px;'>" +
+                "Press \"A\" and \"D\" to rotate on X axis | \"W\" and \"S\" to rotate on Y axis | \"E\" and \"Q\" to rotate on Z axis<br/>\n" +
+                "Press \"F\" and \"H\" to shift along X axis | \"T\" and \"G\" to shift along Y axis | \"R\" and \"Y\" to shift along Z axis<br/>\n" +
+                "Press \"J\", \"L\", \"I\", \"K\", \"U\", \"O\" and \"[\", \"]\", \";\", \"'\", \".\", \"/\" for floor calibration<br/>\n" +
+                "Press \"1\", \"2\" and \"3\" to show/hide models and helper plane, \"4\" to \"9\" to control models and helper plane's opacity\n</a>";
+            if (!show) {
+                $("#showControlInfo").after(info);
+                show = true;
+            }
+            else {
+                $("#info").remove();
+                show = false;
+            }
+        }
+    </script>
+</body>
+</html>

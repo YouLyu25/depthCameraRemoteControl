@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Test</title>
+</head>
+
+<body onload="translate()">
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script>
+    // set globally so that result returned from server can be set to gloabl variables
+    $.ajaxSetup({async: false});
+
+    function translate() {
+        var subscriptionKey = "4e92fb15438d48bb9027a655cf1f26e8";
+        var text = "Hello, world!";
+        var params = "&to=de&to=zh-Hans";
+        var url = "api.cognitive.microsofttranslator.com/translate?api-version=3.0" + params;
+        var postData = {"Text": text};
+        var headers = {"Ocp-Apim-Subscription-Key": subscriptionKey,
+                       "Content-type": 'application/json'};
+        $.ajax({
+            url: url,
+            headers: headers
+        });
+
+        $.post(url, postData,
+            function(response) {
+                alert(response);
+            }
+        );
+    }
+</script>
+</body>
+</html>

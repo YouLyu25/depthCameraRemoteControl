@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Remote Control</title>
+    <style type="text/css">
+        body {
+            margin: 0px;
+            font-family: "Lato", sans-serif;
+            font-size: 15px;
+            line-height: 30px;
+        }
+    </style>
+</head>
+<body onload="updateActiveDeviceList()">
+<div id="deviceList">
+</div>
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+<script>
+    // set globally so that result returned from server can be set to gloabl variables
+    $.ajaxSetup({async: false});
+
+    function checkActiveDevice() {
+        var url = "http://" + location.host + "/web/checkActiveDevice";
+        var op = {"op": "check active device"};
+        $.post(url, op,
+            function(response) {
+                // TODO: display device list
+                var deviceList = response.split(",");
+                // first remove all current element
+                $("button[id='deviceId[]']").each(function(i){
+                    $(this).remove();
+                });
+                $("br[id='blank[]']").each(function(i){
+                    $(this).remove();
+                });
+                for (var i = 0; i < deviceList.length; ++i) {
+                    if (deviceList.length === 1 && deviceList[0] === "") {
+                        break;
+                    }
+                    $("#deviceList").append("<button id='deviceId[]'/><br id='blank[]'/>");
+                }
+                $("button[id='deviceId[]']").each(function(i){
+                    $(this).text(deviceList[i]);
+                    $(this).click(function(){
+                        directToControlInterface(deviceList[i]);
+                    });
+                });
+            }
+        );
+    }
+
+
+    function directToControlInterface(device) {
+        if (device === "") {
+            location.href = "http://" + location.host + "/web/showActiveDevice";
+        }
+        var url = "http://" + location.host + "/web/requestForRemoteControl";
+        var redirectUrl = "http://" + location.host + "/web/directToControlInterface";
+        var postData = {"op": "request for remote control", "deviceMAC": device};
+        $.post(url, postData,
+            function(response) {}
+        );
+        location.href = redirectUrl + "?" + device;
+    }
+
+
+    function updateActiveDeviceList() {
+        self.setInterval("checkActiveDevice()", 500);
+    }
+</script>
+</body>
+</html>
+
+
+
+
+
+
